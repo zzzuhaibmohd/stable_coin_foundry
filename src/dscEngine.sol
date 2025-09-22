@@ -29,9 +29,9 @@ contract dscEngine is ReentrancyGuard {
     uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;
     uint256 private constant PRECISION = 1e18;
 
-    uint256 private constant LIQUIDATION_THRESHOLD = 50; // 200 % over collateral value
-    uint256 private constant LIQUIDATION_PRECISION = 100;
-    uint256 private constant MIN_HEALTH_FACTOR = 1;
+    uint256 public constant LIQUIDATION_THRESHOLD = 50; // 200 % over collateral value
+    uint256 public constant LIQUIDATION_PRECISION = 100;
+    uint256 public constant MIN_HEALTH_FACTOR = 1e18;
 
     mapping(address => address) private s_CollateralToPriceFeed;
     address private immutable i_collateral;
@@ -100,19 +100,16 @@ contract dscEngine is ReentrancyGuard {
     // Private And Internal Functions
     // ========================================
 
-    function _getAccountInfo(address user)
-        internal
-        view
-        returns (uint256 totalDscMinted, uint256 collateralValueInUsd)
-    {
-        totalDscMinted = s_DscMinted[user];
-        collateralValueInUsd = getAccountCollateralValue(user);
-    }
-
     function _healthFactor(address user) internal view returns (uint256) {
-        (uint256 totalDscMinted, uint256 collateralValueInUsd) = _getAccountInfo(user);
+        (uint256 totalDscMinted, uint256 collateralValueInUsd) = getAccountInfo(user);
+
+        // If no DSC is minted, health factor is infinite (or very high)
+        if (totalDscMinted == 0) {
+            return type(uint256).max;
+        }
+
         uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
-        return (totalDscMinted * PRECISION) / collateralAdjustedForThreshold;
+        return (collateralAdjustedForThreshold * PRECISION) / totalDscMinted;
     }
 
     function _revertIfHealthFactorIsBroken(address user) internal view {
@@ -126,6 +123,11 @@ contract dscEngine is ReentrancyGuard {
     // Public And External View Functions
     // ========================================
 
+    function getAccountInfo(address user) public view returns (uint256 totalDscMinted, uint256 collateralValueInUsd) {
+        totalDscMinted = s_DscMinted[user];
+        collateralValueInUsd = getAccountCollateralValue(user);
+    }
+
     function getAccountCollateralValue(address user) public view returns (uint256) {
         return getUsdValue(s_CollateralDeposited[user]);
     }
@@ -134,5 +136,9 @@ contract dscEngine is ReentrancyGuard {
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_CollateralToPriceFeed[i_collateral]);
         (, int256 price,,,) = priceFeed.latestRoundData();
         return (uint256(price) * ADDITIONAL_FEED_PRECISION * amount) / PRECISION;
+    }
+
+    function getHealthFactor(address user) public view returns (uint256) {
+        return _healthFactor(user);
     }
 }
