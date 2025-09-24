@@ -33,6 +33,15 @@ contract dscEngineTest is Test {
     }
 
     /////////////////////////////////////////
+    // Constructor constructor()
+    /////////////////////////////////////////
+
+    function test_constructor_RevertsIfInvalidAddress() public {
+        vm.expectRevert(dscEngine.dscEngine_InvalidAddress.selector);
+        new dscEngine(address(0), address(0), address(0));
+    }
+
+    /////////////////////////////////////////
     // Deposit Collateral depositCollateral()
     /////////////////////////////////////////
 
@@ -83,4 +92,128 @@ contract dscEngineTest is Test {
         uint256 healthFactor = dscCore.getHealthFactor(user);
         assertGe(healthFactor, dscCore.MIN_HEALTH_FACTOR());
     }
+
+    /////////////////////////////////////////
+    // Deposit Collateral And Mint Dsc depositCollateralAndMintDsc()
+    /////////////////////////////////////////
+
+    function testFuzz_depositCollateralAndMintDsc_revertsIfHealthFactorIsBroken(
+        uint256 collateralAmount,
+        uint256 dscAmount
+    ) public {
+        collateralAmount = bound(collateralAmount, 1, type(uint128).max);
+        weth.mint(user, collateralAmount);
+        uint256 maxSafeDscAmount =
+            (dscCore.getUsdValue(collateralAmount) * dscCore.LIQUIDATION_THRESHOLD()) / dscCore.LIQUIDATION_PRECISION(); // 50% of collateral value
+        dscAmount = bound(dscAmount, maxSafeDscAmount + 1 wei, type(uint160).max);
+        vm.startPrank(user);
+        weth.approve(address(dscCore), collateralAmount);
+        vm.expectRevert(dscEngine.dscEngine_HealthFactorIsBroken.selector);
+        dscCore.depositCollateralAndMintDsc(collateralAmount, dscAmount);
+        vm.stopPrank();
+    }
+
+    function testFuzz_depositCollateralAndMintDsc_success(uint256 collateralAmount, uint256 dscAmount) public {
+        collateralAmount = bound(collateralAmount, 1, type(uint128).max);
+        weth.mint(user, collateralAmount);
+        uint256 maxSafeDscAmount =
+            (dscCore.getUsdValue(collateralAmount) * dscCore.LIQUIDATION_THRESHOLD()) / dscCore.LIQUIDATION_PRECISION(); // 50% of collateral value
+        dscAmount = bound(dscAmount, 1, maxSafeDscAmount);
+
+        vm.startPrank(user);
+        weth.approve(address(dscCore), collateralAmount);
+        dscCore.depositCollateralAndMintDsc(collateralAmount, dscAmount);
+        vm.stopPrank();
+
+        (uint256 totalDscMinted, uint256 collateralValueInUsd) = dscCore.getAccountInfo(user);
+        assertEq(collateralValueInUsd, dscCore.getUsdValue(collateralAmount));
+        assertEq(totalDscMinted, dscAmount);
+    }
+
+    /////////////////////////////////////////
+    // Redeem Collateral redeemCollateral()
+    /////////////////////////////////////////
+
+    function testFuzz_redeemCollateral_revertsIfHealthFactorIsBroken(uint256 collateralAmount, uint256 dscAmountToMint)
+        public
+    {
+        collateralAmount = bound(collateralAmount, 1, type(uint128).max);
+        weth.mint(user, collateralAmount);
+        uint256 maxSafeDscAmount =
+            (dscCore.getUsdValue(collateralAmount) * dscCore.LIQUIDATION_THRESHOLD()) / dscCore.LIQUIDATION_PRECISION(); // 50% of collateral value
+        dscAmountToMint = bound(dscAmountToMint, 1, maxSafeDscAmount);
+
+        testFuzz_depositCollateralAndMintDsc_success(collateralAmount, dscAmountToMint);
+
+        vm.startPrank(user);
+        vm.expectRevert(dscEngine.dscEngine_HealthFactorIsBroken.selector);
+        dscCore.redeemCollateral(collateralAmount);
+        vm.stopPrank();
+    }
+
+    function testFuzz_redeemCollateral_success(uint256 collateralAmount, uint256 amountToRedeem) public {
+        collateralAmount = bound(collateralAmount, 1, type(uint128).max);
+        weth.mint(user, collateralAmount);
+        testFuzz_depositCollateral_success(collateralAmount);
+
+        amountToRedeem = bound(amountToRedeem, 1, collateralAmount);
+
+        vm.startPrank(user);
+        dscCore.redeemCollateral(amountToRedeem);
+        vm.stopPrank();
+
+        (uint256 totalDscMinted, uint256 collateralValueInUsd) = dscCore.getAccountInfo(user);
+        assertLt(collateralValueInUsd, dscCore.getUsdValue(collateralAmount));
+    }
+
+    /////////////////////////////////////////
+    // Burn Dsc burnDsc()
+    /////////////////////////////////////////
+
+    function testFuzz_burnDsc_success(uint256 collateralAmount, uint256 dscAmountToMint, uint256 dscAmountToBurn)
+        public
+    {
+        collateralAmount = bound(collateralAmount, 1, type(uint128).max);
+        weth.mint(user, collateralAmount);
+        uint256 maxSafeDscAmount =
+            (dscCore.getUsdValue(collateralAmount) * dscCore.LIQUIDATION_THRESHOLD()) / dscCore.LIQUIDATION_PRECISION(); // 50% of collateral value
+        dscAmountToMint = bound(dscAmountToMint, 1, maxSafeDscAmount);
+        testFuzz_depositCollateralAndMintDsc_success(collateralAmount, dscAmountToMint);
+
+        dscAmountToBurn = bound(dscAmountToBurn, 1, dscAmountToMint);
+
+        vm.startPrank(user);
+        usdc.approve(address(dscCore), dscAmountToBurn);
+        dscCore.burnDsc(dscAmountToBurn);
+        vm.stopPrank();
+
+        (uint256 totalDscMinted, uint256 collateralValueInUsd) = dscCore.getAccountInfo(user);
+        assertEq(totalDscMinted, dscAmountToMint - dscAmountToBurn);
+        assertEq(collateralValueInUsd, dscCore.getUsdValue(collateralAmount));
+    }
+
+    /////////////////////////////////////////
+    // Redeem Collateral For Dsc redeemCollateralForDsc()
+    /////////////////////////////////////////
+
+    function testFuzz_redeemCollateralForDsc_success(
+        uint256 collateralAmount,
+        uint256 dscAmountToMint,
+        uint256 amountToRedeem
+    ) public {
+        collateralAmount = bound(collateralAmount, 1, type(uint128).max);
+        weth.mint(user, collateralAmount);
+        uint256 maxSafeDscAmount =
+            (dscCore.getUsdValue(collateralAmount) * dscCore.LIQUIDATION_THRESHOLD()) / dscCore.LIQUIDATION_PRECISION(); // 50% of collateral value
+        dscAmountToMint = bound(dscAmountToMint, 1, maxSafeDscAmount);
+        testFuzz_depositCollateralAndMintDsc_success(collateralAmount, dscAmountToMint);
+
+        uint256 dscAmountToBurn = dscAmountToMint;
+        amountToRedeem = bound(amountToRedeem, 1, collateralAmount);
+
+        vm.startPrank(user);
+        usdc.approve(address(dscCore), dscAmountToBurn);
+        dscCore.redeemCollateralForDsc(dscAmountToBurn, amountToRedeem);
+        vm.stopPrank();
+    } //@note: Fix this test to calcualte the correct amount to burn and redeem
 }
