@@ -7,6 +7,8 @@ import {dStableCoin} from "../../src/dStableCoin.sol";
 import {dscEngine} from "../../src/dscEngine.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
+import {MockV3Aggregator} from "../mocks/MockV3Aggregator.sol";
+import {console2} from "forge-std/console2.sol";
 
 contract dscEngineTest is Test {
     DeployDSC public deployer;
@@ -17,8 +19,7 @@ contract dscEngineTest is Test {
     address WETH;
     ERC20Mock public weth;
     address WETH_USD_PRICE_FEED;
-
-    address user = makeAddr("user");
+    MockV3Aggregator public wethUsdPriceFeed;
 
     function setUp() public {
         deployer = new DeployDSC();
@@ -26,10 +27,10 @@ contract dscEngineTest is Test {
         (WETH, WETH_USD_PRICE_FEED,) = config.activeNetworkConfig();
 
         weth = ERC20Mock(WETH);
+        wethUsdPriceFeed = MockV3Aggregator(WETH_USD_PRICE_FEED);
 
         //Mint some WETH to the user
         weth.mint(address(this), 1000 ether);
-        weth.mint(user, 1000 ether);
     }
 
     /////////////////////////////////////////
@@ -50,7 +51,8 @@ contract dscEngineTest is Test {
         dscCore.depositCollateral(0);
     }
 
-    function testFuzz_depositCollateral_success(uint256 collateralAmount) public returns (uint256) {
+    function testFuzz_depositCollateral_success(address user, uint256 collateralAmount) public returns (uint256) {
+        vm.assume(user != address(0) && user != address(this));
         collateralAmount = bound(collateralAmount, 1, type(uint128).max);
         weth.mint(user, collateralAmount);
         vm.startPrank(user);
@@ -70,8 +72,9 @@ contract dscEngineTest is Test {
         dscCore.mintDsc(0);
     }
 
-    function testFuzz_mintDsc_success(uint256 collateralAmount, uint256 dscAmount) public {
-        uint256 depositedCollateral = testFuzz_depositCollateral_success(collateralAmount);
+    function testFuzz_mintDsc_success(address user, uint256 collateralAmount, uint256 dscAmount) public {
+        vm.assume(user != address(0) && user != address(this));
+        uint256 depositedCollateral = testFuzz_depositCollateral_success(user, collateralAmount);
 
         uint256 collateralValueInUsd = dscCore.getAccountCollateralValue(user);
         uint256 maxSafeDscAmount =
@@ -98,9 +101,11 @@ contract dscEngineTest is Test {
     /////////////////////////////////////////
 
     function testFuzz_depositCollateralAndMintDsc_revertsIfHealthFactorIsBroken(
+        address user,
         uint256 collateralAmount,
         uint256 dscAmount
     ) public {
+        vm.assume(user != address(0) && user != address(this));
         collateralAmount = bound(collateralAmount, 1, type(uint128).max);
         weth.mint(user, collateralAmount);
         uint256 maxSafeDscAmount =
@@ -113,7 +118,10 @@ contract dscEngineTest is Test {
         vm.stopPrank();
     }
 
-    function testFuzz_depositCollateralAndMintDsc_success(uint256 collateralAmount, uint256 dscAmount) public {
+    function testFuzz_depositCollateralAndMintDsc_success(address user, uint256 collateralAmount, uint256 dscAmount)
+        public
+    {
+        vm.assume(user != address(0) && user != address(this));
         collateralAmount = bound(collateralAmount, 1, type(uint128).max);
         weth.mint(user, collateralAmount);
         uint256 maxSafeDscAmount =
@@ -134,16 +142,19 @@ contract dscEngineTest is Test {
     // Redeem Collateral redeemCollateral()
     /////////////////////////////////////////
 
-    function testFuzz_redeemCollateral_revertsIfHealthFactorIsBroken(uint256 collateralAmount, uint256 dscAmountToMint)
-        public
-    {
+    function testFuzz_redeemCollateral_revertsIfHealthFactorIsBroken(
+        address user,
+        uint256 collateralAmount,
+        uint256 dscAmountToMint
+    ) public {
+        vm.assume(user != address(0) && user != address(this));
         collateralAmount = bound(collateralAmount, 1, type(uint128).max);
         weth.mint(user, collateralAmount);
         uint256 maxSafeDscAmount =
             (dscCore.getUsdValue(collateralAmount) * dscCore.LIQUIDATION_THRESHOLD()) / dscCore.LIQUIDATION_PRECISION(); // 50% of collateral value
         dscAmountToMint = bound(dscAmountToMint, 1, maxSafeDscAmount);
 
-        testFuzz_depositCollateralAndMintDsc_success(collateralAmount, dscAmountToMint);
+        testFuzz_depositCollateralAndMintDsc_success(user, collateralAmount, dscAmountToMint);
 
         vm.startPrank(user);
         vm.expectRevert(dscEngine.dscEngine_HealthFactorIsBroken.selector);
@@ -151,10 +162,11 @@ contract dscEngineTest is Test {
         vm.stopPrank();
     }
 
-    function testFuzz_redeemCollateral_success(uint256 collateralAmount, uint256 amountToRedeem) public {
+    function testFuzz_redeemCollateral_success(address user, uint256 collateralAmount, uint256 amountToRedeem) public {
+        vm.assume(user != address(0) && user != address(this));
         collateralAmount = bound(collateralAmount, 1, type(uint128).max);
         weth.mint(user, collateralAmount);
-        testFuzz_depositCollateral_success(collateralAmount);
+        testFuzz_depositCollateral_success(user, collateralAmount);
 
         amountToRedeem = bound(amountToRedeem, 1, collateralAmount);
 
@@ -170,15 +182,19 @@ contract dscEngineTest is Test {
     // Burn Dsc burnDsc()
     /////////////////////////////////////////
 
-    function testFuzz_burnDsc_success(uint256 collateralAmount, uint256 dscAmountToMint, uint256 dscAmountToBurn)
-        public
-    {
+    function testFuzz_burnDsc_success(
+        address user,
+        uint256 collateralAmount,
+        uint256 dscAmountToMint,
+        uint256 dscAmountToBurn
+    ) public {
+        vm.assume(user != address(0) && user != address(this));
         collateralAmount = bound(collateralAmount, 1, type(uint128).max);
         weth.mint(user, collateralAmount);
         uint256 maxSafeDscAmount =
             (dscCore.getUsdValue(collateralAmount) * dscCore.LIQUIDATION_THRESHOLD()) / dscCore.LIQUIDATION_PRECISION(); // 50% of collateral value
         dscAmountToMint = bound(dscAmountToMint, 1, maxSafeDscAmount);
-        testFuzz_depositCollateralAndMintDsc_success(collateralAmount, dscAmountToMint);
+        testFuzz_depositCollateralAndMintDsc_success(user, collateralAmount, dscAmountToMint);
 
         dscAmountToBurn = bound(dscAmountToBurn, 1, dscAmountToMint);
 
@@ -197,16 +213,18 @@ contract dscEngineTest is Test {
     /////////////////////////////////////////
 
     function testFuzz_redeemCollateralForDsc_success(
+        address user,
         uint256 collateralAmount,
         uint256 dscAmountToMint,
         uint256 amountToRedeem
     ) public {
+        vm.assume(user != address(0) && user != address(this));
         collateralAmount = bound(collateralAmount, 1, type(uint128).max);
         weth.mint(user, collateralAmount);
         uint256 maxSafeDscAmount =
             (dscCore.getUsdValue(collateralAmount) * dscCore.LIQUIDATION_THRESHOLD()) / dscCore.LIQUIDATION_PRECISION(); // 50% of collateral value
         dscAmountToMint = bound(dscAmountToMint, 1, maxSafeDscAmount);
-        testFuzz_depositCollateralAndMintDsc_success(collateralAmount, dscAmountToMint);
+        testFuzz_depositCollateralAndMintDsc_success(user, collateralAmount, dscAmountToMint);
 
         uint256 dscAmountToBurn = dscAmountToMint;
         amountToRedeem = bound(amountToRedeem, 1, collateralAmount);
